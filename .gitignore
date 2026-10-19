@@ -1,0 +1,25 @@
+﻿# CMake
+build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# Qt/MinGW
+*.o
+*.obj
+*.exe
+*.dll
+*.pdb
+
+# IDE
+.vscode/
+.vs/
+*.user
+*.pro.user
+
+# ОС
+Thumbs.db
+.DS_Store
+*.db
+*.log
