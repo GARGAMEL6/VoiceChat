@@ -1,11 +1,12 @@
 #include "control_server.h"
 #include "client_session.h"
+#include "auth_manager.h" // 🔹 Подключаем
 #include <QDateTime>
 #include <QJsonDocument>
 #include <QDebug>
 
-ControlServer::ControlServer(quint16 port, QObject* parent)
-    : QObject(parent)
+ControlServer::ControlServer(quint16 port, AuthManager* auth, QObject* parent)
+    : QObject(parent), m_auth(auth) // 🔹 Сохраняем указатель
 {
     if (!m_tcpServer.listen(QHostAddress::Any, port)) {
         qCritical() << "[CONTROL] Failed to bind port" << port << ":" << m_tcpServer.errorString();
@@ -26,12 +27,10 @@ void ControlServer::onNewConnection() {
     m_sessions.append(session);
     qDebug() << "[CONTROL] Client connected. Active sessions:" << m_sessions.size();
 
-    // Когда сессия закрывается, удаляем её из списка
     connect(session, &ClientSession::sessionClosed, this, [this, session]() {
         onSessionClosed(session);
     });
 
-    // Когда сессия получает команду, маршрутизируем её
     connect(session, &ClientSession::messageReceived, this, [this, session](const QString& cmd, const QJsonObject& data, int reqId) {
         QJsonObject resp;
         resp["req_id"] = reqId;
@@ -41,27 +40,35 @@ void ControlServer::onNewConnection() {
             resp["status"] = "ok";
             session->sendReply(resp);
         } 
-        else if (cmd == "REGISTER" || cmd == "LOGIN") {
-            // Эти команды обрабатываются в main.cpp через AuthManager, 
-            // но для простоты оставим заглушку или передадим сигнал выше. 
-            // Пока оставим базовый ответ, чтобы не усложнять.
-            resp["cmd"] = cmd + "_ACK";
-            resp["status"] = "ok";
+        else if (cmd == "REGISTER") {
+            QString login = data["login"].toString();
+            QString pass = data["pass"].toString();
+            bool ok = m_auth->registerUser(login, pass); // 🔹 Вызываем AuthManager
+            resp["cmd"] = "REGISTER_ACK";
+            resp["status"] = ok ? "ok" : "error";
+            resp["reason"] = ok ? "" : "User already exists or invalid data";
+            session->sendReply(resp);
+        } 
+        else if (cmd == "LOGIN") {
+            QString login = data["login"].toString();
+            QString pass = data["pass"].toString();
+            bool ok = m_auth->verifyUser(login, pass); // 🔹 Вызываем AuthManager
+            resp["cmd"] = "LOGIN_ACK";
+            resp["status"] = ok ? "ok" : "error";
+            resp["reason"] = ok ? "" : "Invalid credentials";
             session->sendReply(resp);
         } 
         else if (cmd == "CHAT") {
             QString username = data.value("username").toString("Anonymous");
             QString text = data.value("text").toString();
             
-            if (text.isEmpty()) return; // Игнорируем пустые сообщения
+            if (text.isEmpty()) return;
 
-            // Формируем полезную нагрузку
             QJsonObject payload;
             payload["from"] = username;
             payload["text"] = text;
             payload["ts"] = QDateTime::currentMSecsSinceEpoch();
 
-            // Оборачиваем в команду для клиентов
             QJsonObject broadcastMsg;
             broadcastMsg["cmd"] = "CHAT_MSG";
             broadcastMsg["data"] = payload;
