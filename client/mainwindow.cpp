@@ -59,10 +59,25 @@ void MainWindow::setupChatUI() {
     QWidget* page = new QWidget;
     QVBoxLayout* mainLayout = new QVBoxLayout(page);
 
+    // 🔹 Верхняя панель с кнопкой выхода
+    QHBoxLayout* topBar = new QHBoxLayout;
+    QLabel* lblTitle = new QLabel("Чат");
+    lblTitle->setStyleSheet("font-weight: bold; font-size: 14px;");
+    topBar->addWidget(lblTitle);
+    topBar->addStretch();
+    
+    QPushButton* btnLogout = new QPushButton("Выйти");
+    btnLogout->setStyleSheet("padding: 4px 12px;");
+    topBar->addWidget(btnLogout);
+    
+    mainLayout->addLayout(topBar);
+
+    // Список сообщений
     m_listMessages = new QListWidget;
     m_listMessages->setSelectionMode(QAbstractItemView::NoSelection);
     mainLayout->addWidget(m_listMessages);
 
+    // Поле ввода
     QHBoxLayout* inputLayout = new QHBoxLayout;
     m_editMessage = new QLineEdit;
     m_editMessage->setPlaceholderText("Введите сообщение...");
@@ -75,6 +90,7 @@ void MainWindow::setupChatUI() {
 
     connect(m_btnSend, &QPushButton::clicked, this, &MainWindow::onSendClicked);
     connect(m_editMessage, &QLineEdit::returnPressed, this, &MainWindow::onSendClicked);
+    connect(btnLogout, &QPushButton::clicked, this, &MainWindow::onLogoutClicked);
 
     m_stack->addWidget(page);
 }
@@ -213,4 +229,22 @@ void MainWindow::onCommandReceived(const QString& cmd, const QJsonObject& data, 
         m_listMessages->addItem(displayText);
         m_listMessages->scrollToBottom();
     }
+}
+
+
+void MainWindow::onLogoutClicked() {
+    qDebug() << "[GUI] Logout clicked";
+    
+    // Отключаемся от сервера
+    m_client->disconnectFromServer();
+    
+    // Очищаем данные пользователя
+    m_currentUser.clear();
+    m_listMessages->clear();
+    m_editMessage->clear();
+    
+    // Возвращаемся на экран логина
+    switchToLogin();
+    m_lblStatus->setText("Вы вышли из системы");
+    m_lblStatus->setStyleSheet("color: gray;");
 }

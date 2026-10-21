@@ -26,6 +26,7 @@ private:
     void setupChatUI();
     void switchToLogin();
     void switchToChat();
+    void onLogoutClicked();
 
     TcpClient* m_client;
     QStackedWidget* m_stack;
