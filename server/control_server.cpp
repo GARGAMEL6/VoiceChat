@@ -36,28 +36,20 @@ void ControlServer::onNewConnection() {
         resp["req_id"] = reqId;
 
         if (cmd == "PING") {
-            resp["cmd"] = "PONG";
-            resp["status"] = "ok";
-            session->sendReply(resp);
+            sendStatus(session, "PONG", reqId, true);
         } 
         else if (cmd == "REGISTER") {
             QString login = data["login"].toString();
             QString pass = data["pass"].toString();
-            bool ok = m_auth->registerUser(login, pass); // 🔹 Вызываем AuthManager
-            resp["cmd"] = "REGISTER_ACK";
-            resp["status"] = ok ? "ok" : "error";
-            resp["reason"] = ok ? "" : "User already exists or invalid data";
-            session->sendReply(resp);
+            bool ok = m_auth->registerUser(login, pass);
+            sendStatus(session, "REGISTER_ACK", reqId, ok, "User already exists or invalid data");
         } 
         else if (cmd == "LOGIN") {
             QString login = data["login"].toString();
             QString pass = data["pass"].toString();
-            bool ok = m_auth->verifyUser(login, pass); // 🔹 Вызываем AuthManager
-            resp["cmd"] = "LOGIN_ACK";
-            resp["status"] = ok ? "ok" : "error";
-            resp["reason"] = ok ? "" : "Invalid credentials";
-            session->sendReply(resp);
-        } 
+            bool ok = m_auth->verifyUser(login, pass);
+            sendStatus(session, "LOGIN_ACK", reqId, ok, "Invalid credentials");
+        }
         else if (cmd == "CHAT") {
             QString username = data.value("username").toString("Anonymous");
             QString text = data.value("text").toString();
@@ -100,4 +92,22 @@ void ControlServer::broadcast(const QJsonObject& msg) {
         }
     }
     qDebug() << "[CONTROL] Broadcast complete. Sent to" << sentCount << "clients.";
+}
+
+
+void ControlServer::sendStatus(ClientSession* session, const QString& ack, 
+                               int reqId, bool ok, const QString& reason)
+{
+    // 🔹 Полезные данные ВСЕГДА в data
+    QJsonObject payload;
+    payload["status"] = ok ? "ok" : "error";
+    if (!ok) payload["reason"] = reason;
+
+    // 🔹 Конверт: cmd и req_id в корне
+    QJsonObject resp;
+    resp["cmd"]    = ack;
+    resp["req_id"] = reqId;
+    resp["data"]   = payload;
+
+    session->sendReply(resp);
 }

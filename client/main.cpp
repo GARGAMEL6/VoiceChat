@@ -1,26 +1,40 @@
 #include <QApplication>
-#include <QMainWindow>
-#include <QLabel>
+#include <QTimer>
 #include <QDebug>
+#include "tcp_client.h"
 
 int main(int argc, char *argv[]) {
-    // 1. Инициализируем GUI-приложение (вместо QCoreApplication)
     QApplication app(argc, argv);
+    qDebug() << "[CLIENT] App started.";
 
-    qDebug() << "[CLIENT] Qt GUI initialized. Version:" << qVersion();
+    TcpClient client;
 
-    // 2. Создаём простое тестовое окно
-    QMainWindow window;
-    window.setWindowTitle("Voice Client (Test)");
-    window.resize(400, 300);
+    // Подписываемся на сигналы для отладки
+    QObject::connect(&client, &TcpClient::connected, []() {
+        qDebug() << "[CLIENT] ✅ Connected to server!";
+    });
+    QObject::connect(&client, &TcpClient::disconnected, []() {
+        qDebug() << "[CLIENT] ❌ Disconnected.";
+    });
+    QObject::connect(&client, &TcpClient::messageReceived, [](const QString& cmd, const QJsonObject& data, int reqId) {
+        qDebug() << "[CLIENT] 📨 Received:" << cmd << "| Status:" << data["status"].toString();
+    });
 
-    QLabel* label = new QLabel("Hello, Qt Widgets!", &window);
-    label->setAlignment(Qt::AlignCenter);
-    window.setCentralWidget(label);
+    // Подключаемся к нашему серверу
+    client.connectToServer("127.0.0.1", 9000);
 
-    // 3. Показываем окно и запускаем Event Loop
-    window.show();
-    
-    qDebug() << "[CLIENT] Entering event loop. Close window to exit.";
+    // Через 1 секунду после запуска отправляем PING
+    QTimer::singleShot(1000, [&client]() {
+        qDebug() << "[CLIENT] Sending PING...";
+        client.sendCommand("PING", {}, 1);
+    });
+
+    // Через 2 секунды отключаемся и завершаем приложение
+    QTimer::singleShot(2000, [&client, &app]() {
+        qDebug() << "[CLIENT] Disconnecting and exiting...";
+        client.disconnectFromServer();
+        app.quit(); // Завершаем Event Loop
+    });
+
     return app.exec();
 }

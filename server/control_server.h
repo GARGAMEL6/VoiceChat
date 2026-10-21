@@ -19,6 +19,9 @@ private slots:
 
 private:
     void broadcast(const QJsonObject& msg);
+    void sendStatus(ClientSession* session, const QString& ack, 
+                    int reqId, bool ok, const QString& reason = QString());
+                    
     QTcpServer m_tcpServer;
     QList<ClientSession*> m_sessions;
     AuthManager* m_auth; // 🔹 Указатель на AuthManager
