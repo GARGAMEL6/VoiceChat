@@ -5,6 +5,7 @@
 #include <QDebug>
 #include <QJsonObject>
 #include "client_session.h"
+#include "auth_manager.h"
 
 int main(int argc, char *argv[]) {
     QCoreApplication app(argc, argv);
@@ -13,6 +14,13 @@ int main(int argc, char *argv[]) {
     QSettings settings(configPath, QSettings::IniFormat);
     quint16 tcpPort = settings.value("network/tcp_port", 9000).toUInt();
     qDebug() << "[SERVER] Config loaded:" << configPath << "| Port:" << tcpPort;
+
+    // 🔹 Инициализация БД
+    AuthManager auth;
+    if (!auth.init()) {
+        qCritical() << "[SERVER] AuthManager init failed. Exiting.";
+        return 1;
+    }
 
     QTcpServer tcpServer;
     if (!tcpServer.listen(QHostAddress::Any, tcpPort)) {
@@ -26,26 +34,31 @@ int main(int argc, char *argv[]) {
         ClientSession* session = new ClientSession(socket, &tcpServer);
 
         QObject::connect(session, &ClientSession::messageReceived, 
-            [session](const QString& cmd, const QJsonObject& data, int reqId) {
+            [session, &auth](const QString& cmd, const QJsonObject& data, int reqId) {
                 QJsonObject resp;
                 resp["req_id"] = reqId;
 
                 if (cmd == "PING") {
                     resp["cmd"] = "PONG";
                     resp["status"] = "ok";
-                } else if (cmd == "REGISTER") {
+                } 
+                else if (cmd == "REGISTER") {
                     QString login = data["login"].toString();
+                    QString pass = data["pass"].toString();
+                    bool ok = auth.registerUser(login, pass);
                     resp["cmd"] = "REGISTER_ACK";
-                    resp["status"] = "ok";
-                    resp["reason"] = "User registered (stub)";
-                    qDebug() << "[SERVER] REGISTER:" << login;
-                } else if (cmd == "LOGIN") {
+                    resp["status"] = ok ? "ok" : "error";
+                    resp["reason"] = ok ? "" : "User already exists or invalid data";
+                } 
+                else if (cmd == "LOGIN") {
                     QString login = data["login"].toString();
+                    QString pass = data["pass"].toString();
+                    bool ok = auth.verifyUser(login, pass);
                     resp["cmd"] = "LOGIN_ACK";
-                    resp["status"] = "ok";
-                    resp["reason"] = "Login successful (stub)";
-                    qDebug() << "[SERVER] LOGIN:" << login;
-                } else {
+                    resp["status"] = ok ? "ok" : "error";
+                    resp["reason"] = ok ? "" : "Invalid credentials";
+                } 
+                else {
                     resp["cmd"] = cmd + "_ERR";
                     resp["status"] = "error";
                     resp["reason"] = "Unknown command";
@@ -55,7 +68,7 @@ int main(int argc, char *argv[]) {
             });
 
         QObject::connect(session, &ClientSession::sessionClosed, []() {
-            qDebug() << "[SERVER] Session closed, cleaning up";
+            qDebug() << "[SERVER] Session closed";
         });
     });
 
