@@ -10,6 +10,7 @@ qt_standard_project_setup()
 
 add_executable(VoiceServer
     main.cpp
+    control_server.h control_server.cpp
     client_session.h client_session.cpp
     auth_manager.h auth_manager.cpp
 )

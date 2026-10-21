@@ -52,3 +52,7 @@ void ClientSession::sendReply(const QJsonObject& response) {
     m_socket->write(reply);
     qDebug() << "[SESSION] Tx:" << reply.trimmed();
 }
+
+void ClientSession::sendRaw(const QByteArray& data) {
+    m_socket->write(data);
+}
