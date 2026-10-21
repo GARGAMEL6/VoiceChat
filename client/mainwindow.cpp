@@ -5,6 +5,7 @@
 #include <QDateTime>
 #include <QDebug>
 #include <QTimer>
+#include <QJsonArray>
 
 MainWindow::MainWindow(TcpClient* client, QWidget* parent)
     : QMainWindow(parent), m_client(client), m_stack(new QStackedWidget(this))
@@ -191,6 +192,20 @@ void MainWindow::onCommandReceived(const QString& cmd, const QJsonObject& data, 
         switchToLogin();
         m_lblStatus->setText("Вы вышли из системы");
         return;
+    }
+    else if (cmd == "HISTORY") {
+        QJsonArray messages = data["messages"].toArray();
+        qDebug() << "[GUI] Received" << messages.size() << "history messages";
+        
+        // Отображаем каждое сообщение
+        for (const QJsonValue& val : messages) {
+            QJsonObject msg = val.toObject();
+            QString from = msg["from"].toString();
+            QString text = msg["text"].toString();
+            qint64 ts = msg["ts"].toVariant().toLongLong();
+            
+            addMessageToChat(from, text, ts);
+        }
     }
     
     if (cmd == "REGISTER_ACK") {

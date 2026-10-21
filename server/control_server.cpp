@@ -3,6 +3,7 @@
 #include "auth_manager.h" // 🔹 Подключаем
 #include <QDateTime>
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QDebug>
 
 ControlServer::ControlServer(quint16 port, AuthManager* auth, QObject* parent)
@@ -79,6 +80,18 @@ void ControlServer::onNewConnection() {
                 
                 // Регистрируем новую сессию
                 m_onlineUsers[login] = session;
+
+                QJsonArray history = m_auth->getRecentMessages(10);
+                if (!history.isEmpty()) {
+                    QJsonObject historyMsg;
+                    historyMsg["cmd"] = "HISTORY";
+                    QJsonObject historyData;
+                    historyData["messages"] = history;
+                    historyMsg["data"] = historyData;
+                    session->sendReply(historyMsg);
+                    qDebug() << "[CONTROL] Sent" << history.size() << "messages to" << login;
+                }
+
                 qDebug() << "[CONTROL] User logged in:" << login;
             }
             
@@ -101,6 +114,10 @@ void ControlServer::onNewConnection() {
 
             qDebug() << "[CONTROL] Broadcasting CHAT_MSG from" << username;
             broadcast(broadcastMsg);
+
+            qint64 timestamp = QDateTime::currentMSecsSinceEpoch();
+            m_auth->saveMessage(username, text, timestamp);
+            qDebug() << "[CONTROL] Message saved to DB from" << username;
         } 
         else {
             resp["cmd"] = cmd + "_ERR";

@@ -4,6 +4,9 @@
 #include <QCryptographicHash>
 #include <QDebug>
 #include <QCoreApplication>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QJsonValue>
 
 AuthManager::AuthManager(QObject* parent) : QObject(parent) {}
 
@@ -27,6 +30,15 @@ bool AuthManager::init() {
                     "login TEXT UNIQUE NOT NULL, "
                     "password_hash TEXT NOT NULL)")) {
         qCritical() << "[AUTH] Failed to create table:" << query.lastError().text();
+        return false;
+    }
+
+    if (!query.exec("CREATE TABLE IF NOT EXISTS messages ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "sender TEXT NOT NULL, "
+                    "text TEXT NOT NULL, "
+                    "ts INTEGER NOT NULL)")) {
+        qCritical() << "[AUTH] Failed to create messages table:" << query.lastError().text();
         return false;
     }
 
@@ -72,4 +84,43 @@ bool AuthManager::verifyUser(const QString& login, const QString& password) {
 
     qDebug() << "[AUTH] Login successful:" << login;
     return true;
+}
+
+
+bool AuthManager::saveMessage(const QString& sender, const QString& text, qint64 ts) {
+    QSqlQuery query;
+    query.prepare("INSERT INTO messages (sender, text, ts) VALUES (:sender, :text, :ts)");
+    query.bindValue(":sender", sender);
+    query.bindValue(":text", text);
+    query.bindValue(":ts", ts);
+
+    if (!query.exec()) {
+        qWarning() << "[AUTH] Failed to save message:" << query.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+QJsonArray AuthManager::getRecentMessages(int limit) {
+    QSqlQuery query;
+    query.prepare("SELECT sender, text, ts FROM messages ORDER BY id DESC LIMIT :limit");
+    query.bindValue(":limit", limit);
+
+    QJsonArray messages;
+    if (query.exec()) {
+        while (query.next()) {
+            QJsonObject msg;
+            msg["from"] = query.value("sender").toString();
+            msg["text"] = query.value("text").toString();
+            msg["ts"] = query.value("ts").toLongLong();
+            messages.append(msg);
+        }
+    }
+
+    // Переворачиваем массив (был от новых к старым, станет от старых к новым)
+    QJsonArray reversed;
+    for (int i = messages.size() - 1; i >= 0; --i) {
+        reversed.append(messages[i]);
+    }
+    return reversed;
 }
