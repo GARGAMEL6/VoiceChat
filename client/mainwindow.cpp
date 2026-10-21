@@ -211,7 +211,14 @@ void MainWindow::onCommandReceived(const QString& cmd, const QJsonObject& data, 
             m_lblStatus->clear();
             m_lblStatus->setStyleSheet("color: gray;");
             switchToChat();
-            m_listMessages->addItem("[Система] Вы вошли как " + m_currentUser);
+            QListWidgetItem* sysItem = new QListWidgetItem("[Система] Вы вошли как " + m_currentUser, m_listMessages);
+            sysItem->setBackground(QColor(220, 220, 255));  // Светло-голубой
+            sysItem->setForeground(QColor(0, 0, 100));       // Тёмно-синий текст
+            QFont sysFont = sysItem->font();
+            sysFont.setItalic(true);
+            sysItem->setFont(sysFont);
+            m_listMessages->addItem(sysItem);
+            m_listMessages->scrollToBottom();
         } else {
             QString reason = data["reason"].toString();
             m_lblStatus->setText("Ошибка входа: " + reason);
@@ -221,13 +228,9 @@ void MainWindow::onCommandReceived(const QString& cmd, const QJsonObject& data, 
     else if (cmd == "CHAT_MSG") {
         QString from = data.value("from").toString("Unknown");
         QString text = data["text"].toString();
-        
         qint64 ts = data["ts"].toVariant().toLongLong();
-        QString time = QDateTime::fromMSecsSinceEpoch(ts).toString("HH:mm");
-
-        QString displayText = QString("[%1] %2: %3").arg(time, from, text);
-        m_listMessages->addItem(displayText);
-        m_listMessages->scrollToBottom();
+        
+        addMessageToChat(from, text, ts);
     }
 }
 
@@ -247,4 +250,33 @@ void MainWindow::onLogoutClicked() {
     switchToLogin();
     m_lblStatus->setText("Вы вышли из системы");
     m_lblStatus->setStyleSheet("color: gray;");
+}
+
+
+void MainWindow::addMessageToChat(const QString& from, const QString& text, qint64 ts) {
+    // Форматируем время
+    QString time = QDateTime::fromMSecsSinceEpoch(ts).toString("HH:mm");
+    
+    // Определяем, наше ли это сообщение
+    bool isMine = (from == m_currentUser);
+    
+    // Формируем отображаемый текст
+    QString displayFrom = isMine ? "Вы" : from;
+    QString displayText = QString("[%1] %2: %3").arg(time, displayFrom, text);
+    
+    // Создаём элемент списка
+    QListWidgetItem* item = new QListWidgetItem(displayText, m_listMessages);
+    
+    // Применяем цвет фона
+    if (isMine) {
+        item->setBackground(QColor(200, 230, 200));  // Светло-зелёный
+        item->setForeground(QColor(0, 80, 0));        // Тёмно-зелёный текст
+    } else {
+        item->setBackground(QColor(240, 240, 240));  // Светло-серый
+        item->setForeground(QColor(0, 0, 0));         // Чёрный текст
+    }
+    
+    // Добавляем в список и прокручиваем вниз
+    m_listMessages->addItem(item);
+    m_listMessages->scrollToBottom();
 }

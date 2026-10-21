@@ -27,6 +27,7 @@ private:
     void switchToLogin();
     void switchToChat();
     void onLogoutClicked();
+    void addMessageToChat(const QString& from, const QString& text, qint64 ts);
 
     TcpClient* m_client;
     QStackedWidget* m_stack;
