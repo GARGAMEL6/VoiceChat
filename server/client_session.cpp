@@ -56,3 +56,7 @@ void ClientSession::sendReply(const QJsonObject& response) {
 void ClientSession::sendRaw(const QByteArray& data) {
     m_socket->write(data);
 }
+
+void ClientSession::disconnectFromServer() {
+    m_socket->disconnectFromHost();
+}

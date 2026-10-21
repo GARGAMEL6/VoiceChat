@@ -28,6 +28,14 @@ void ControlServer::onNewConnection() {
     qDebug() << "[CONTROL] Client connected. Active sessions:" << m_sessions.size();
 
     connect(session, &ClientSession::sessionClosed, this, [this, session]() {
+        // 🔹 Удаляем пользователя из маппинга, если он там есть
+        for (auto it = m_onlineUsers.begin(); it != m_onlineUsers.end(); ++it) {
+            if (it.value() == session) {
+                m_onlineUsers.erase(it);
+                qDebug() << "[CONTROL] Removed user from online list";
+                break;
+            }
+        }
         onSessionClosed(session);
     });
 
@@ -48,6 +56,32 @@ void ControlServer::onNewConnection() {
             QString login = data["login"].toString();
             QString pass = data["pass"].toString();
             bool ok = m_auth->verifyUser(login, pass);
+            
+            if (ok) {
+                // 🔹 Проверяем, не онлайн ли уже этот пользователь
+                if (m_onlineUsers.contains(login)) {
+                    ClientSession* oldSession = m_onlineUsers[login];
+                    
+                    // Шлём старой сессии команду KICKED
+                    QJsonObject kickMsg;
+                    kickMsg["cmd"] = "KICKED";
+                    QJsonObject kickData;
+                    kickData["reason"] = "Logged in elsewhere";
+                    kickMsg["data"] = kickData;
+                    oldSession->sendReply(kickMsg);
+                    
+                    // Закрываем старую сессию
+                    oldSession->disconnectFromServer();
+                    m_onlineUsers.remove(login);
+                    
+                    qDebug() << "[CONTROL] Kicked old session for user:" << login;
+                }
+                
+                // Регистрируем новую сессию
+                m_onlineUsers[login] = session;
+                qDebug() << "[CONTROL] User logged in:" << login;
+            }
+            
             sendStatus(session, "LOGIN_ACK", reqId, ok, "Invalid credentials");
         }
         else if (cmd == "CHAT") {

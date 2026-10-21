@@ -11,7 +11,8 @@ qt_standard_project_setup()
 
 add_executable(VoiceClient
     main.cpp
-    tcp_client.h tcp_client.cpp  # <-- ДОБАВЛЕНО
+    tcp_client.h tcp_client.cpp
+    mainwindow.h mainwindow.cpp  # <-- ДОБАВЛЕНО
 )
 
 target_link_libraries(VoiceClient PRIVATE Qt6::Core Qt6::Network Qt6::Widgets)
