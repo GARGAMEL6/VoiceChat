@@ -6,9 +6,11 @@
 #include <QDebug>
 #include <QTimer>
 #include <QJsonArray>
+#include <QScrollBar>
 
 MainWindow::MainWindow(TcpClient* client, QWidget* parent)
-    : QMainWindow(parent), m_client(client), m_stack(new QStackedWidget(this))
+    : QMainWindow(parent), m_client(client), m_stack(new QStackedWidget(this)),
+      m_isLoadingHistory(false), m_isHistoryExhausted(false)
 {
     setCentralWidget(m_stack);
     setWindowTitle("Voice Chat");
@@ -92,6 +94,8 @@ void MainWindow::setupChatUI() {
     connect(m_btnSend, &QPushButton::clicked, this, &MainWindow::onSendClicked);
     connect(m_editMessage, &QLineEdit::returnPressed, this, &MainWindow::onSendClicked);
     connect(btnLogout, &QPushButton::clicked, this, &MainWindow::onLogoutClicked);
+    connect(m_listMessages->verticalScrollBar(), &QScrollBar::valueChanged, 
+            this, &MainWindow::onHistoryScroll);
 
     m_stack->addWidget(page);
 }
@@ -112,6 +116,8 @@ void MainWindow::onLoginClicked() {
         m_lblStatus->setText("Заполните все поля");
         return;
     }
+
+    m_currentUser = login;
 
     m_lblStatus->setStyleSheet("color: gray;");
     m_lblStatus->setText("Подключение...");
@@ -194,17 +200,47 @@ void MainWindow::onCommandReceived(const QString& cmd, const QJsonObject& data, 
         return;
     }
     else if (cmd == "HISTORY") {
+        // Это push-сообщение при входе. Очищаем список и грузим начальные 10.
+        m_listMessages->clear();
         QJsonArray messages = data["messages"].toArray();
-        qDebug() << "[GUI] Received" << messages.size() << "history messages";
-        
-        // Отображаем каждое сообщение
         for (const QJsonValue& val : messages) {
             QJsonObject msg = val.toObject();
-            QString from = msg["from"].toString();
-            QString text = msg["text"].toString();
-            qint64 ts = msg["ts"].toVariant().toLongLong();
-            
-            addMessageToChat(from, text, ts);
+            addMessageToChat(msg["from"].toString(), msg["text"].toString(),
+                             msg["ts"].toVariant().toLongLong(),
+                             msg["id"].toVariant().toLongLong(),
+                             false); // false = добавляем в конец (они уже отсортированы сервером)
+        }
+        m_isHistoryExhausted = !data["has_more"].toBool();
+    }
+    else if (cmd == "HISTORY_RESP") {
+        // Это ответ на запрос при скролле вверх
+        QJsonArray messages = data["messages"].toArray();
+        bool hasMore = data["has_more"].toBool();
+
+        if (messages.isEmpty()) {
+            m_isHistoryExhausted = true;
+            m_isLoadingHistory = false;
+            return;
+        }
+
+        // 🔹 МАГИЯ БЕЗ ПРЫЖКОВ: запоминаем текущий верхний элемент
+        QListWidgetItem* oldTopItem = m_listMessages->item(0);
+
+        // Вставляем новые (более старые) сообщения НАВЕРХ
+        for (const QJsonValue& val : messages) {
+            QJsonObject msg = val.toObject();
+            addMessageToChat(msg["from"].toString(), msg["text"].toString(),
+                             msg["ts"].toVariant().toLongLong(),
+                             msg["id"].toVariant().toLongLong(),
+                             true); // true = вставляем в начало (prepend)
+        }
+
+        m_isHistoryExhausted = !hasMore;
+        m_isLoadingHistory = false;
+
+        // 🔹 ВОССТАНАВЛИВАЕМ позицию скролла, чтобы экран не дернулся
+        if (oldTopItem) {
+            m_listMessages->scrollToItem(oldTopItem, QAbstractItemView::PositionAtTop);
         }
     }
     
@@ -222,19 +258,30 @@ void MainWindow::onCommandReceived(const QString& cmd, const QJsonObject& data, 
     else if (cmd == "LOGIN_ACK") {
         QString status = data["status"].toString();
         if (status == "ok") {
-            m_currentUser = m_editLogin->text().trimmed();
+            // 🔹 БЕРИ ЛОГИН ИЗ ПОЛЯ ВВОДА, НО ТОЛЬКО ЕСЛИ ОНО НЕ ПУСТОЕ
+            // ИЛИ лучше: сервер должен возвращать логин в ответе
+            QString login = m_editLogin->text().trimmed();
+            if (!login.isEmpty()) {
+                m_currentUser = login;
+            }
+            
             m_lblStatus->clear();
             m_lblStatus->setStyleSheet("color: gray;");
             switchToChat();
-            QListWidgetItem* sysItem = new QListWidgetItem("[Система] Вы вошли как " + m_currentUser, m_listMessages);
-            sysItem->setBackground(QColor(220, 220, 255));  // Светло-голубой
-            sysItem->setForeground(QColor(0, 0, 100));       // Тёмно-синий текст
+            
+            // Системное сообщение
+            QListWidgetItem* sysItem = new QListWidgetItem(
+                "[Система] Вы вошли как " + m_currentUser, m_listMessages);
+            sysItem->setBackground(QColor(220, 220, 255));
+            sysItem->setForeground(QColor(0, 0, 100));
             QFont sysFont = sysItem->font();
             sysFont.setItalic(true);
             sysItem->setFont(sysFont);
             m_listMessages->addItem(sysItem);
             m_listMessages->scrollToBottom();
         } else {
+            m_currentUser.clear();
+            
             QString reason = data["reason"].toString();
             m_lblStatus->setText("Ошибка входа: " + reason);
             m_lblStatus->setStyleSheet("color: red;");
@@ -244,8 +291,10 @@ void MainWindow::onCommandReceived(const QString& cmd, const QJsonObject& data, 
         QString from = data.value("from").toString("Unknown");
         QString text = data["text"].toString();
         qint64 ts = data["ts"].toVariant().toLongLong();
+        qint64 id = data["id"].toVariant().toLongLong(); // <-- ДОБАВЛЕНО: извлекаем id
         
-        addMessageToChat(from, text, ts);
+        // <-- ОБНОВЛЕНО: передаем 5 аргументов, false = добавляем в конец
+        addMessageToChat(from, text, ts, id, false);
     }
 }
 
@@ -258,6 +307,9 @@ void MainWindow::onLogoutClicked() {
     
     // Очищаем данные пользователя
     m_currentUser.clear();
+    m_editLogin->clear();
+    m_editPass->clear();
+
     m_listMessages->clear();
     m_editMessage->clear();
     
@@ -268,30 +320,65 @@ void MainWindow::onLogoutClicked() {
 }
 
 
-void MainWindow::addMessageToChat(const QString& from, const QString& text, qint64 ts) {
-    // Форматируем время
+void MainWindow::addMessageToChat(const QString& from, const QString& text, qint64 ts, qint64 id, bool prepend) {
     QString time = QDateTime::fromMSecsSinceEpoch(ts).toString("HH:mm");
+
+    // 🔹 ОТЛАДКА: выведи в консоль
+    qDebug() << "[GUI] Adding msg | from:" << from << "| currentUser:" << m_currentUser 
+             << "| isMine:" << (from == m_currentUser);
     
-    // Определяем, наше ли это сообщение
+    
     bool isMine = (from == m_currentUser);
-    
-    // Формируем отображаемый текст
     QString displayFrom = isMine ? "Вы" : from;
     QString displayText = QString("[%1] %2: %3").arg(time, displayFrom, text);
     
-    // Создаём элемент списка
-    QListWidgetItem* item = new QListWidgetItem(displayText, m_listMessages);
+    QListWidgetItem* item = new QListWidgetItem(displayText);
     
-    // Применяем цвет фона
+    // 🔹 КЛЮЧЕВОЙ МОМЕНТ: сохраняем ID сообщения в данные элемента
+    item->setData(Qt::UserRole, id);
+    
     if (isMine) {
-        item->setBackground(QColor(200, 230, 200));  // Светло-зелёный
-        item->setForeground(QColor(0, 80, 0));        // Тёмно-зелёный текст
+        item->setBackground(QColor(200, 230, 200));
+        item->setForeground(QColor(0, 80, 0));
     } else {
-        item->setBackground(QColor(240, 240, 240));  // Светло-серый
-        item->setForeground(QColor(0, 0, 0));         // Чёрный текст
+        item->setBackground(QColor(240, 240, 240));
+        item->setForeground(QColor(0, 0, 0));
     }
     
-    // Добавляем в список и прокручиваем вниз
-    m_listMessages->addItem(item);
-    m_listMessages->scrollToBottom();
+    if (prepend) {
+        // Вставляем в начало (для подгружаемой истории)
+        m_listMessages->insertItem(0, item);
+    } else {
+        // Добавляем в конец (для новых сообщений и начальной загрузки)
+        m_listMessages->addItem(item);
+        m_listMessages->scrollToBottom();
+    }
+}
+
+
+void MainWindow::onHistoryScroll(int value) {
+    Q_UNUSED(value);
+    
+    // Если уже грузим или история кончилась — ничего не делаем
+    if (m_isLoadingHistory || m_isHistoryExhausted) return;
+
+    QScrollBar* scrollBar = m_listMessages->verticalScrollBar();
+    
+    // Триггер: пользователь прокрутил почти до самого верха (с запасом 100 пикселей)
+    if (scrollBar->value() <= scrollBar->minimum() + 100) {
+        m_isLoadingHistory = true;
+        qDebug() << "[GUI] Triggered history load...";
+
+        // Берем ID самого верхнего сообщения как курсор
+        qint64 beforeId = -1;
+        QListWidgetItem* topItem = m_listMessages->item(0);
+        if (topItem) {
+            beforeId = topItem->data(Qt::UserRole).toLongLong();
+        }
+
+        QJsonObject data;
+        data["before_id"] = beforeId;
+        data["limit"] = 10;
+        m_client->sendCommand("HISTORY_REQ", data, 0);
+    }
 }

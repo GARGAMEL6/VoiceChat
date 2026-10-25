@@ -5,6 +5,7 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QListWidget>
+#include <QJsonObject>
 #include "tcp_client.h"
 
 class MainWindow : public QMainWindow {
@@ -15,19 +16,22 @@ public:
 private slots:
     void onLoginClicked();
     void onRegisterClicked();
-    void onSendClicked();
+    void onLogoutClicked();
+    void onSendClicked();          // <-- ДОБАВЛЕНО (было пропущено)
     void onConnected();
     void onDisconnected();
     void onError(const QString& errorText);
     void onCommandReceived(const QString& cmd, const QJsonObject& data, int reqId);
+    void onHistoryScroll(int value);
 
 private:
     void setupLoginUI();
     void setupChatUI();
     void switchToLogin();
     void switchToChat();
-    void onLogoutClicked();
-    void addMessageToChat(const QString& from, const QString& text, qint64 ts);
+    
+    // <-- ОБНОВЛЕНО: 5 аргументов
+    void addMessageToChat(const QString& from, const QString& text, qint64 ts, qint64 id, bool prepend = false);
 
     TcpClient* m_client;
     QStackedWidget* m_stack;
@@ -45,4 +49,8 @@ private:
     QPushButton* m_btnSend;
     
     QString m_currentUser;
+    
+    // Флаги для управления историей
+    bool m_isLoadingHistory;
+    bool m_isHistoryExhausted;
 };

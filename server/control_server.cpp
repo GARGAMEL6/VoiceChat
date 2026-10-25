@@ -87,6 +87,7 @@ void ControlServer::onNewConnection() {
                     historyMsg["cmd"] = "HISTORY";
                     QJsonObject historyData;
                     historyData["messages"] = history;
+                    historyData["has_more"] = (history.size() == 10);
                     historyMsg["data"] = historyData;
                     session->sendReply(historyMsg);
                     qDebug() << "[CONTROL] Sent" << history.size() << "messages to" << login;
@@ -98,27 +99,70 @@ void ControlServer::onNewConnection() {
             sendStatus(session, "LOGIN_ACK", reqId, ok, "Invalid credentials");
         }
         else if (cmd == "CHAT") {
-            QString username = data.value("username").toString("Anonymous");
-            QString text = data.value("text").toString();
-            
+            // 1. Отправлять может только авторизованная сессия
+            QString login = loginForSession(session);
+            if (login.isEmpty()) {
+                sendStatus(session, "CHAT_ERR", reqId, false, "Login required");
+                return;
+            }
+
+            // 2. Валидация текста
+            QString text = data.value("text").toString().trimmed();
             if (text.isEmpty()) return;
+            if (text.size() > 2000) {
+                sendStatus(session, "CHAT_ERR", reqId, false, "Message too long");
+                return;
+            }
+
+            // 3. ОДИН timestamp и для БД, и для рассылки
+            qint64 ts = QDateTime::currentMSecsSinceEpoch();
+            qint64 id = m_auth->saveMessage(login, text, ts);
+
+            if (id < 0) {
+                sendStatus(session, "CHAT_ERR", reqId, false, "Failed to save message");
+                return;
+            }
+
+            // 4. from — из сессии, НЕ из данных клиента
+            QJsonObject payload;
+            payload["id"]   = id;
+            payload["from"] = login;
+            payload["text"] = text;
+            payload["ts"]   = ts;
+
+            QJsonObject out;
+            out["cmd"]  = "CHAT_MSG";
+            out["data"] = payload;
+
+            broadcast(out);
+            qDebug() << "[CONTROL] Saved + broadcast id" << id << "from" << login;
+        }
+        else if (cmd == "HISTORY_REQ") {
+            // Историю тоже имеет право запрашивать только вошедший пользователь
+            if (loginForSession(session).isEmpty()) {
+                sendStatus(session, "HISTORY_ERR", reqId, false, "Login required");
+                return;
+            }
+
+            qint64 beforeId = data.value("before_id").toVariant().toLongLong();
+            int limit = data.value("limit").toInt(10);
+            if (limit <= 0 || limit > 100) limit = 10;
+
+            QJsonArray messages = m_auth->getRecentMessages(limit, beforeId);
 
             QJsonObject payload;
-            payload["from"] = username;
-            payload["text"] = text;
-            payload["ts"] = QDateTime::currentMSecsSinceEpoch();
+            payload["messages"] = messages;
+            payload["has_more"] = (messages.size() == limit);
 
-            QJsonObject broadcastMsg;
-            broadcastMsg["cmd"] = "CHAT_MSG";
-            broadcastMsg["data"] = payload;
+            QJsonObject out;
+            out["cmd"]    = "HISTORY_RESP";
+            out["req_id"] = reqId;
+            out["data"]   = payload;
 
-            qDebug() << "[CONTROL] Broadcasting CHAT_MSG from" << username;
-            broadcast(broadcastMsg);
-
-            qint64 timestamp = QDateTime::currentMSecsSinceEpoch();
-            m_auth->saveMessage(username, text, timestamp);
-            qDebug() << "[CONTROL] Message saved to DB from" << username;
-        } 
+            session->sendReply(out);
+            qDebug() << "[CONTROL] History page:" << messages.size()
+                    << "before_id:" << beforeId;
+        }
         else {
             resp["cmd"] = cmd + "_ERR";
             resp["status"] = "error";
@@ -161,4 +205,13 @@ void ControlServer::sendStatus(ClientSession* session, const QString& ack,
     resp["data"]   = payload;
 
     session->sendReply(resp);
+}
+
+
+QString ControlServer::loginForSession(ClientSession* session) const
+{
+    for (auto it = m_onlineUsers.constBegin(); it != m_onlineUsers.constEnd(); ++it) {
+        if (it.value() == session) return it.key();
+    }
+    return QString();   // пустая строка = сессия не авторизована
 }

@@ -22,6 +22,8 @@ private:
     void broadcast(const QJsonObject& msg);
     void sendStatus(ClientSession* session, const QString& ack, 
                     int reqId, bool ok, const QString& reason = QString());
+
+    QString loginForSession(ClientSession* session) const;
     
     QMap<QString, ClientSession*> m_onlineUsers;
     QTcpServer m_tcpServer;

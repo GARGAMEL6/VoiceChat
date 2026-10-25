@@ -86,9 +86,9 @@ bool AuthManager::verifyUser(const QString& login, const QString& password) {
     return true;
 }
 
-
-bool AuthManager::saveMessage(const QString& sender, const QString& text, qint64 ts) {
-    QSqlQuery query;
+qint64 AuthManager::saveMessage(const QString& sender, const QString& text, qint64 ts)
+{
+    QSqlQuery query(m_db);
     query.prepare("INSERT INTO messages (sender, text, ts) VALUES (:sender, :text, :ts)");
     query.bindValue(":sender", sender);
     query.bindValue(":text", text);
@@ -96,31 +96,51 @@ bool AuthManager::saveMessage(const QString& sender, const QString& text, qint64
 
     if (!query.exec()) {
         qWarning() << "[AUTH] Failed to save message:" << query.lastError().text();
-        return false;
+        return -1;
     }
-    return true;
+
+    return query.lastInsertId().toLongLong();
 }
 
-QJsonArray AuthManager::getRecentMessages(int limit) {
-    QSqlQuery query;
-    query.prepare("SELECT sender, text, ts FROM messages ORDER BY id DESC LIMIT :limit");
+QJsonArray AuthManager::getRecentMessages(int limit, qint64 beforeId)
+{
+    // Защита: клиент не может запросить миллион строк
+    if (limit <= 0 || limit > 100) limit = 10;
+
+    QSqlQuery query(m_db);
+
+    if (beforeId > 0) {
+        // Страница ДО указанной позиции (скролл вверх)
+        query.prepare("SELECT id, sender, text, ts FROM messages "
+                      "WHERE id < :before_id ORDER BY id DESC LIMIT :limit");
+        query.bindValue(":before_id", beforeId);
+    } else {
+        // Первая страница: самые свежие
+        query.prepare("SELECT id, sender, text, ts FROM messages "
+                      "ORDER BY id DESC LIMIT :limit");
+    }
     query.bindValue(":limit", limit);
 
-    QJsonArray messages;
-    if (query.exec()) {
-        while (query.next()) {
-            QJsonObject msg;
-            msg["from"] = query.value("sender").toString();
-            msg["text"] = query.value("text").toString();
-            msg["ts"] = query.value("ts").toLongLong();
-            messages.append(msg);
-        }
+    QJsonArray fetched;
+    if (!query.exec()) {
+        qWarning() << "[AUTH] History query failed:" << query.lastError().text();
+        return fetched;
     }
 
-    // Переворачиваем массив (был от новых к старым, станет от старых к новым)
-    QJsonArray reversed;
-    for (int i = messages.size() - 1; i >= 0; --i) {
-        reversed.append(messages[i]);
+    while (query.next()) {
+        QJsonObject msg;
+        msg["id"]   = query.value("id").toLongLong();
+        msg["from"] = query.value("sender").toString();
+        msg["text"] = query.value("text").toString();
+        msg["ts"]   = query.value("ts").toLongLong();
+        fetched.append(msg);
     }
-    return reversed;
+
+    // SQL отдал новые→старые. Клиенту отдаём старые→новые,
+    // чтобы он просто шел по массиву сверху вниз.
+    QJsonArray ordered;
+    for (int i = fetched.size() - 1; i >= 0; --i) {
+        ordered.append(fetched.at(i));
+    }
+    return ordered;
 }
