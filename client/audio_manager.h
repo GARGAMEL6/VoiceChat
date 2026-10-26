@@ -5,6 +5,7 @@
 #include <QMediaDevices>
 #include <QAudioFormat>
 #include <QStringList>
+#include <QIODevice>
 
 class AudioManager : public QObject {
     Q_OBJECT
@@ -12,18 +13,27 @@ public:
     explicit AudioManager(QObject* parent = nullptr);
     ~AudioManager();
 
-    // Получить списки названий устройств для ComboBox
     QStringList getMicrophones() const;
     QStringList getSpeakers() const;
 
-    // Запустить захват с микрофона и вывод в динамик
-    void startLoopback(const QString& micDesc, const QString& speakerDesc);
+    void startCapture(const QString& micDesc);
+    void startPlayback(const QString& speakerDesc);
     
-    // Остановить и освободить ресурсы
-    void stopLoopback();
+    void stopCapture();
+    void stopPlayback();
+
+    void playAudioData(const QByteArray& data);
+    QIODevice* getCaptureDevice() const { return m_inputDevice; }
+    QIODevice* getPlaybackDevice() const { return m_outputDevice; }
+
+    void setVolume(qreal volume);
+    bool isMuted() const { return m_isMuted; }
+    void setMuted(bool muted) { m_isMuted = muted; }
 
 private:
-    QAudioSource* m_audioSource = nullptr;
-    QAudioSink* m_audioSink = nullptr;
-    QIODevice* m_ioDevice = nullptr;
+    QAudioSource* m_source = nullptr;
+    QAudioSink* m_sink = nullptr;
+    QIODevice* m_inputDevice = nullptr;
+    QIODevice* m_outputDevice = nullptr;
+    bool m_isMuted = false;
 };

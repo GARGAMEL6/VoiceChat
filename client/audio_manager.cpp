@@ -4,7 +4,8 @@
 AudioManager::AudioManager(QObject* parent) : QObject(parent) {}
 
 AudioManager::~AudioManager() {
-    stopLoopback();
+    stopCapture();
+    stopPlayback();
 }
 
 QStringList AudioManager::getMicrophones() const {
@@ -23,64 +24,78 @@ QStringList AudioManager::getSpeakers() const {
     return list;
 }
 
-void AudioManager::startLoopback(const QString& micDesc, const QString& speakerDesc) {
-    stopLoopback();
+void AudioManager::startCapture(const QString& micDesc) {
+    stopCapture();
 
-    // Находим устройства по описанию
-    QAudioDevice micDevice, speakerDevice;
+    QAudioDevice micDevice;
     for (const auto& dev : QMediaDevices::audioInputs()) {
-        if (dev.description() == micDesc) {
-            micDevice = dev;
-            break;
-        }
-    }
-    for (const auto& dev : QMediaDevices::audioOutputs()) {
-        if (dev.description() == speakerDesc) {
-            speakerDevice = dev;
-            break;
-        }
+        if (dev.description() == micDesc) { micDevice = dev; break; }
     }
 
-    // 🔹 В Qt6 проверка через isNull()
-    if (micDevice.isNull() || speakerDevice.isNull()) {
-        qWarning() << "[AUDIO] Invalid devices selected! mic:" << micDesc << "speaker:" << speakerDesc;
+    if (micDevice.isNull()) {
+        qWarning() << "[AUDIO] Mic not found:" << micDesc;
         return;
     }
 
-    // Настраиваем формат аудио (моно, 16 бит, 48000 Гц — стандарт для голоса)
     QAudioFormat format;
     format.setSampleRate(48000);
     format.setChannelCount(1);
     format.setSampleFormat(QAudioFormat::Int16);
 
     if (!micDevice.isFormatSupported(format)) {
-        qWarning() << "[AUDIO] Format not supported, using preferred";
         format = micDevice.preferredFormat();
     }
 
-    // Создаём источники и приёмники
-    m_audioSource = new QAudioSource(micDevice, format, this);
-    m_audioSink = new QAudioSink(speakerDevice, format, this);
-
-    // 🔹 МАГИЯ: соединяем поток данных напрямую
-    m_ioDevice = m_audioSource->start();
-    m_audioSink->start(m_ioDevice);
-
-    qDebug() << "[AUDIO] Loopback started:" << micDesc << "->" << speakerDesc
-             << "| format:" << format.sampleRate() << "Hz," << format.channelCount() << "ch";
+    m_source = new QAudioSource(micDevice, format, this);
+    m_inputDevice = m_source->start();
+    qDebug() << "[AUDIO] Capture started:" << micDesc;
 }
 
-void AudioManager::stopLoopback() {
-    if (m_audioSource) {
-        m_audioSource->stop();
-        delete m_audioSource;
-        m_audioSource = nullptr;
+void AudioManager::startPlayback(const QString& speakerDesc) {
+    stopPlayback();
+
+    QAudioDevice speakerDevice;
+    for (const auto& dev : QMediaDevices::audioOutputs()) {
+        if (dev.description() == speakerDesc) { speakerDevice = dev; break; }
     }
-    if (m_audioSink) {
-        m_audioSink->stop();
-        delete m_audioSink;
-        m_audioSink = nullptr;
+
+    if (speakerDevice.isNull()) {
+        qWarning() << "[AUDIO] Speaker not found:" << speakerDesc;
+        return;
     }
-    m_ioDevice = nullptr;
-    qDebug() << "[AUDIO] Loopback stopped";
+
+    QAudioFormat format;
+    format.setSampleRate(48000);
+    format.setChannelCount(1);
+    format.setSampleFormat(QAudioFormat::Int16);
+
+    if (!speakerDevice.isFormatSupported(format)) {
+        format = speakerDevice.preferredFormat();
+    }
+
+    m_sink = new QAudioSink(speakerDevice, format, this);
+    m_outputDevice = m_sink->start();
+    qDebug() << "[AUDIO] Playback started:" << speakerDesc;
+}
+
+void AudioManager::stopCapture() {
+    if (m_source) { m_source->stop(); delete m_source; m_source = nullptr; }
+    m_inputDevice = nullptr;
+}
+
+void AudioManager::stopPlayback() {
+    if (m_sink) { m_sink->stop(); delete m_sink; m_sink = nullptr; }
+    m_outputDevice = nullptr;
+}
+
+void AudioManager::playAudioData(const QByteArray& data) {
+    if (m_outputDevice) {
+        m_outputDevice->write(data);
+    }
+}
+
+void AudioManager::setVolume(qreal volume) {
+    if (m_sink) {
+        m_sink->setVolume(volume);
+    }
 }

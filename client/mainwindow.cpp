@@ -11,7 +11,11 @@
 MainWindow::MainWindow(TcpClient* client, QWidget* parent)
     : QMainWindow(parent), m_client(client), m_stack(new QStackedWidget(this)),
       m_isLoadingHistory(false), m_isHistoryExhausted(false),
-      m_audioManager(new AudioManager(this))
+      m_audioManager(new AudioManager(this)),
+      m_udpSocket(new QUdpSocket(this)), // <-- ДОБАВЛЕНО
+      m_inVoiceRoom(false),              // <-- ДОБАВЛЕНО
+      m_localUdpPort(0),
+      m_isMuted(false) // <-- ДОБАВЛЕНО
 {
     setCentralWidget(m_stack);
     setWindowTitle("Voice Chat");
@@ -24,6 +28,12 @@ MainWindow::MainWindow(TcpClient* client, QWidget* parent)
     connect(m_client, &TcpClient::disconnected, this, &MainWindow::onDisconnected);
     connect(m_client, &TcpClient::errorOccurred, this, &MainWindow::onError);
     connect(m_client, &TcpClient::messageReceived, this, &MainWindow::onCommandReceived);
+    
+    connect(&m_mediaDevices, &QMediaDevices::audioInputsChanged, this, &MainWindow::onAudioDevicesChanged);
+    connect(&m_mediaDevices, &QMediaDevices::audioOutputsChanged, this, &MainWindow::onAudioDevicesChanged);
+    // ...
+    
+    
 
     switchToLogin();
 }
@@ -90,32 +100,45 @@ void MainWindow::setupChatUI() {
     m_btnSend = new QPushButton("Отправить");
     inputLayout->addWidget(m_btnSend);
     
-        // 🔹 Панель управления звуком
+        // 🔹 Панель управления голосом
+        // 🔹 Панель управления голосом
     QHBoxLayout* audioLayout = new QHBoxLayout;
     
     m_comboMic = new QComboBox;
     m_comboMic->addItems(m_audioManager->getMicrophones());
     audioLayout->addWidget(new QLabel("Микрофон:"));
     audioLayout->addWidget(m_comboMic, 1);
+    connect(m_comboMic, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::onMicChanged);
     
     m_comboSpeaker = new QComboBox;
     m_comboSpeaker->addItems(m_audioManager->getSpeakers());
     audioLayout->addWidget(new QLabel("Динамик:"));
     audioLayout->addWidget(m_comboSpeaker, 1);
+    connect(m_comboSpeaker, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::onSpeakerChanged);
     
-    m_btnStartAudio = new QPushButton("▶ Тест");
-    m_btnStartAudio->setStyleSheet("background-color: #4CAF50; color: white;");
-    audioLayout->addWidget(m_btnStartAudio);
+    // Кнопка Mute
+    m_btnMute = new QPushButton("Mute");
+    m_btnMute->setCheckable(true);
+    m_btnMute->setEnabled(false); // Неактивна, пока не в комнате
+    audioLayout->addWidget(m_btnMute);
+    connect(m_btnMute, &QPushButton::toggled, this, &MainWindow::onMuteToggled);
     
-    m_btnStopAudio = new QPushButton("⏹ Стоп");
-    m_btnStopAudio->setStyleSheet("background-color: #f44336; color: white;");
-    m_btnStopAudio->setEnabled(false);
-    audioLayout->addWidget(m_btnStopAudio);
+    // Ползунок громкости
+    m_volumeSlider = new QSlider(Qt::Horizontal);
+    m_volumeSlider->setRange(0, 100);
+    m_volumeSlider->setValue(80);
+    m_volumeSlider->setEnabled(false);
+    audioLayout->addWidget(new QLabel("Громкость:"));
+    audioLayout->addWidget(m_volumeSlider, 1);
+    connect(m_volumeSlider, &QSlider::valueChanged, this, &MainWindow::onVolumeChanged);
+    
+    // Кнопка входа
+    m_btnVoiceRoom = new QPushButton("🎙️ Войти в комнату");
+    m_btnVoiceRoom->setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;");
+    audioLayout->addWidget(m_btnVoiceRoom);
     
     mainLayout->addLayout(audioLayout);
-    
-    connect(m_btnStartAudio, &QPushButton::clicked, this, &MainWindow::onStartAudioTest);
-    connect(m_btnStopAudio, &QPushButton::clicked, this, &MainWindow::onStopAudioTest);
+    connect(m_btnVoiceRoom, &QPushButton::clicked, this, &MainWindow::onJoinVoiceRoom);
 
     mainLayout->addLayout(inputLayout);
 
@@ -411,28 +434,183 @@ void MainWindow::onHistoryScroll(int value) {
     }
 }
 
-void MainWindow::onStartAudioTest() {
-    QString mic = m_comboMic->currentText();
-    QString speaker = m_comboSpeaker->currentText();
-    
-    if (mic.isEmpty() || speaker.isEmpty()) {
-        qDebug() << "[GUI] No audio devices selected!";
+
+void MainWindow::onJoinVoiceRoom() {
+    if (m_inVoiceRoom) {
+        onLeaveVoiceRoom();
         return;
     }
+
+    QString mic = m_comboMic->currentText();
+    QString speaker = m_comboSpeaker->currentText();
+    if (mic.isEmpty() || speaker.isEmpty()) return;
+
+    // 1. Биндим UDP сокет на случайный порт (ОС сама выберет свободный)
+    if (!m_udpSocket->bind(0, QUdpSocket::ShareAddress)) {
+        qWarning() << "[VOICE] Failed to bind UDP socket";
+        return;
+    }
+    m_localUdpPort = m_udpSocket->localPort();
+    qDebug() << "[VOICE] Local UDP port:" << m_localUdpPort;
+
+    // 2. Запускаем аудио
+    m_audioManager->startCapture(mic);
+    m_audioManager->startPlayback(speaker);
+
+    // 3. Соединяем Микрофон -> UDP
+    QIODevice* captureDev = m_audioManager->getCaptureDevice();
+    if (captureDev) {
+        connect(captureDev, &QIODevice::readyRead, this, &MainWindow::onAudioCaptured);
+    }
+
+    // 4. Соединяем UDP -> Динамик
+    connect(m_udpSocket, &QUdpSocket::readyRead, this, &MainWindow::onUdpAudioReceived);
+
+    // 5. Говорим серверу, что мы в комнате
+    QJsonObject data;
+    data["udp_port"] = m_localUdpPort;
+    m_client->sendCommand("JOIN_VOICE", data, 0);
+
+    // 🔹 ИЗМЕНЕНО: Разблокируем элементы
+    m_inVoiceRoom = true;
+    m_btnVoiceRoom->setText("🔇 Выйти из комнаты");
+    m_btnVoiceRoom->setStyleSheet("background-color: #f44336; color: white; font-weight: bold;");
     
-    m_audioManager->startLoopback(mic, speaker);
-    
-    m_btnStartAudio->setEnabled(false);
-    m_btnStopAudio->setEnabled(true);
-    m_comboMic->setEnabled(false);
-    m_comboSpeaker->setEnabled(false);
+    m_btnMute->setEnabled(true);
+    m_volumeSlider->setEnabled(true);
+    // ComboBox'ы остаются активными для Hot-swap!
 }
 
-void MainWindow::onStopAudioTest() {
-    m_audioManager->stopLoopback();
+void MainWindow::onLeaveVoiceRoom() {
+    if (!m_inVoiceRoom) return;
+
+    // 1. Останавливаем аудио
+    m_audioManager->stopCapture();
+    m_audioManager->stopPlayback();
+
+    // 2. Отключаем сигналы
+    disconnect(m_udpSocket, &QUdpSocket::readyRead, this, &MainWindow::onUdpAudioReceived);
+
+    // 3. Говорим серверу
+    m_client->sendCommand("LEAVE_VOICE", {}, 0);
+
+    // 4. Освобождаем порт
+    m_udpSocket->close();
+    m_localUdpPort = 0;
+
+    // 5. Меняем UI
+    m_inVoiceRoom = false;
+    m_btnVoiceRoom->setText("🎙️ Войти в комнату");
+    m_btnVoiceRoom->setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;");
     
-    m_btnStartAudio->setEnabled(true);
-    m_btnStopAudio->setEnabled(false);
-    m_comboMic->setEnabled(true);
-    m_comboSpeaker->setEnabled(true);
+    m_btnMute->setEnabled(false);
+    m_btnMute->setChecked(false);
+    m_volumeSlider->setEnabled(false);
+    m_isMuted = false;
+}
+
+void MainWindow::onAudioCaptured() {
+    if (m_isMuted) {
+        // Если замьючены, просто сбрасываем буфер, не отправляя
+        QIODevice* captureDev = m_audioManager->getCaptureDevice();
+        if (captureDev) captureDev->readAll();
+        return;
+    }
+
+    QIODevice* captureDev = m_audioManager->getCaptureDevice();
+    if (!captureDev) return;
+
+    QByteArray data = captureDev->readAll();
+    if (!data.isEmpty()) {
+        m_udpSocket->writeDatagram(data, QHostAddress("127.0.0.1"), 9001);
+    }
+}
+
+void MainWindow::onUdpAudioReceived() {
+    // Читаем байты из сети и скармливаем динамику
+    while (m_udpSocket->hasPendingDatagrams()) {
+        QByteArray datagram;
+        datagram.resize(m_udpSocket->pendingDatagramSize());
+        m_udpSocket->readDatagram(datagram.data(), datagram.size());
+        
+        m_audioManager->playAudioData(datagram);
+    }
+}
+
+void MainWindow::onMuteToggled(bool checked) {
+    m_isMuted = checked;
+    m_btnMute->setText(checked ? "Unmute" : "Mute");
+    m_btnMute->setStyleSheet(checked ? "background-color: #ff9800; color: white;" : "");
+    qDebug() << "[VOICE] Mute:" << checked;
+}
+
+void MainWindow::onVolumeChanged(int value) {
+    qreal volume = value / 100.0;
+    m_audioManager->setVolume(volume);
+}
+
+void MainWindow::onMicChanged(int index) {
+    if (!m_inVoiceRoom || index < 0) return;
+    qDebug() << "[VOICE] Hot-swap Mic to:" << m_comboMic->currentText();
+    
+    // Перезапуск захвата
+    m_audioManager->stopCapture();
+    m_audioManager->startCapture(m_comboMic->currentText());
+    
+    QIODevice* dev = m_audioManager->getCaptureDevice();
+    if (dev) {
+        connect(dev, &QIODevice::readyRead, this, &MainWindow::onAudioCaptured);
+    }
+}
+
+void MainWindow::onSpeakerChanged(int index) {
+    if (!m_inVoiceRoom || index < 0) return;
+    qDebug() << "[VOICE] Hot-swap Speaker to:" << m_comboSpeaker->currentText();
+    
+    // Перезапуск воспроизведения
+    m_audioManager->stopPlayback();
+    m_audioManager->startPlayback(m_comboSpeaker->currentText());
+}
+
+void MainWindow::onAudioDevicesChanged() {
+    qDebug() << "[VOICE] Audio devices changed in system";
+    
+    QString currentMic = m_comboMic->currentText();
+    QString currentSpeaker = m_comboSpeaker->currentText();
+    
+    m_comboMic->blockSignals(true);
+    m_comboSpeaker->blockSignals(true);
+    
+    m_comboMic->clear();
+    m_comboMic->addItems(m_audioManager->getMicrophones());
+    m_comboSpeaker->clear();
+    m_comboSpeaker->addItems(m_audioManager->getSpeakers());
+    
+    // Пытаемся восстановить выбор
+    int micIdx = m_comboMic->findText(currentMic);
+    if (micIdx >= 0) {
+        m_comboMic->setCurrentIndex(micIdx);
+    } else if (m_comboMic->count() > 0) {
+        // 🔹 Старое устройство исчезло — переключаемся на первое доступное
+        m_comboMic->setCurrentIndex(0);
+        if (m_inVoiceRoom) {
+            qDebug() << "[VOICE] Mic device lost, switching to:" << m_comboMic->currentText();
+            onMicChanged(0);
+        }
+    }
+    
+    int spkIdx = m_comboSpeaker->findText(currentSpeaker);
+    if (spkIdx >= 0) {
+        m_comboSpeaker->setCurrentIndex(spkIdx);
+    } else if (m_comboSpeaker->count() > 0) {
+        //  Старое устройство исчезло — переключаемся на первое доступное
+        m_comboSpeaker->setCurrentIndex(0);
+        if (m_inVoiceRoom) {
+            qDebug() << "[VOICE] Speaker device lost, switching to:" << m_comboSpeaker->currentText();
+            onSpeakerChanged(0);
+        }
+    }
+    
+    m_comboMic->blockSignals(false);
+    m_comboSpeaker->blockSignals(false);
 }
