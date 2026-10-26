@@ -10,7 +10,8 @@
 
 MainWindow::MainWindow(TcpClient* client, QWidget* parent)
     : QMainWindow(parent), m_client(client), m_stack(new QStackedWidget(this)),
-      m_isLoadingHistory(false), m_isHistoryExhausted(false)
+      m_isLoadingHistory(false), m_isHistoryExhausted(false),
+      m_audioManager(new AudioManager(this))
 {
     setCentralWidget(m_stack);
     setWindowTitle("Voice Chat");
@@ -88,6 +89,33 @@ void MainWindow::setupChatUI() {
 
     m_btnSend = new QPushButton("Отправить");
     inputLayout->addWidget(m_btnSend);
+    
+        // 🔹 Панель управления звуком
+    QHBoxLayout* audioLayout = new QHBoxLayout;
+    
+    m_comboMic = new QComboBox;
+    m_comboMic->addItems(m_audioManager->getMicrophones());
+    audioLayout->addWidget(new QLabel("Микрофон:"));
+    audioLayout->addWidget(m_comboMic, 1);
+    
+    m_comboSpeaker = new QComboBox;
+    m_comboSpeaker->addItems(m_audioManager->getSpeakers());
+    audioLayout->addWidget(new QLabel("Динамик:"));
+    audioLayout->addWidget(m_comboSpeaker, 1);
+    
+    m_btnStartAudio = new QPushButton("▶ Тест");
+    m_btnStartAudio->setStyleSheet("background-color: #4CAF50; color: white;");
+    audioLayout->addWidget(m_btnStartAudio);
+    
+    m_btnStopAudio = new QPushButton("⏹ Стоп");
+    m_btnStopAudio->setStyleSheet("background-color: #f44336; color: white;");
+    m_btnStopAudio->setEnabled(false);
+    audioLayout->addWidget(m_btnStopAudio);
+    
+    mainLayout->addLayout(audioLayout);
+    
+    connect(m_btnStartAudio, &QPushButton::clicked, this, &MainWindow::onStartAudioTest);
+    connect(m_btnStopAudio, &QPushButton::clicked, this, &MainWindow::onStopAudioTest);
 
     mainLayout->addLayout(inputLayout);
 
@@ -381,4 +409,30 @@ void MainWindow::onHistoryScroll(int value) {
         data["limit"] = 10;
         m_client->sendCommand("HISTORY_REQ", data, 0);
     }
+}
+
+void MainWindow::onStartAudioTest() {
+    QString mic = m_comboMic->currentText();
+    QString speaker = m_comboSpeaker->currentText();
+    
+    if (mic.isEmpty() || speaker.isEmpty()) {
+        qDebug() << "[GUI] No audio devices selected!";
+        return;
+    }
+    
+    m_audioManager->startLoopback(mic, speaker);
+    
+    m_btnStartAudio->setEnabled(false);
+    m_btnStopAudio->setEnabled(true);
+    m_comboMic->setEnabled(false);
+    m_comboSpeaker->setEnabled(false);
+}
+
+void MainWindow::onStopAudioTest() {
+    m_audioManager->stopLoopback();
+    
+    m_btnStartAudio->setEnabled(true);
+    m_btnStopAudio->setEnabled(false);
+    m_comboMic->setEnabled(true);
+    m_comboSpeaker->setEnabled(true);
 }

@@ -5,8 +5,10 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QListWidget>
+#include <QComboBox>       // <-- ДОБАВЛЕНО
 #include <QJsonObject>
 #include "tcp_client.h"
+#include "audio_manager.h" // <-- ДОБАВЛЕНО
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -17,20 +19,22 @@ private slots:
     void onLoginClicked();
     void onRegisterClicked();
     void onLogoutClicked();
-    void onSendClicked();          // <-- ДОБАВЛЕНО (было пропущено)
+    void onSendClicked();
     void onConnected();
     void onDisconnected();
     void onError(const QString& errorText);
     void onCommandReceived(const QString& cmd, const QJsonObject& data, int reqId);
     void onHistoryScroll(int value);
+    
+    // 🔹 Новые слоты для аудио
+    void onStartAudioTest();
+    void onStopAudioTest();
 
 private:
     void setupLoginUI();
     void setupChatUI();
     void switchToLogin();
     void switchToChat();
-    
-    // <-- ОБНОВЛЕНО: 5 аргументов
     void addMessageToChat(const QString& from, const QString& text, qint64 ts, qint64 id, bool prepend = false);
 
     TcpClient* m_client;
@@ -48,12 +52,15 @@ private:
     QLineEdit* m_editMessage;
     QPushButton* m_btnSend;
     
+    // 🔹 Элементы управления звуком
+    QComboBox* m_comboMic;
+    QComboBox* m_comboSpeaker;
+    QPushButton* m_btnStartAudio;
+    QPushButton* m_btnStopAudio;
+    
     QString m_currentUser;
-    
-    
-    
-    
-    // Флаги для управления историей
     bool m_isLoadingHistory;
     bool m_isHistoryExhausted;
+    
+    AudioManager* m_audioManager; // <-- ДОБАВЛЕНО
 };
