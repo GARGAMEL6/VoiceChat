@@ -23,3 +23,6 @@ add_custom_command(TARGET VoiceServer POST_BUILD
             "$<TARGET_FILE:VoiceServer>"
     VERBATIM
 )
+
+# Копируем config.ini в папку сборки
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/config.ini DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

@@ -3,15 +3,17 @@
 #include <QJsonParseError>
 #include <QDebug>
 
-TcpClient::TcpClient(QObject* parent) : QObject(parent), m_socket(new QTcpSocket(this)) {
-    // Подписываемся на события сокета
+TcpClient::TcpClient(const QString& host, quint16 tcpPort, quint16 udpPort, QObject* parent)
+    : QObject(parent), m_socket(new QTcpSocket(this)),
+      m_host(host), m_tcpPort(tcpPort), m_udpPort(udpPort)
+{
     connect(m_socket, &QTcpSocket::readyRead, this, &TcpClient::onReadyRead);
     connect(m_socket, &QTcpSocket::disconnected, this, &TcpClient::onDisconnected);
     connect(m_socket, &QAbstractSocket::errorOccurred, this, &TcpClient::onError);
 }
 
-void TcpClient::connectToServer(const QString& host, quint16 port) {
-    m_socket->connectToHost(host, port);
+void TcpClient::connectToServer() {
+    m_socket->connectToHost(m_host, m_tcpPort);
 }
 
 void TcpClient::disconnectFromServer() {
@@ -44,7 +46,7 @@ void TcpClient::onReadyRead() {
     int pos;
     while ((pos = m_buffer.indexOf('\n')) != -1) {
         QByteArray line = m_buffer.left(pos);
-        m_buffer.remove(0, pos + 1); // Удаляем обработанную часть + \n
+        m_buffer.remove(0, pos + 1);
         if (line.isEmpty()) continue;
 
         QJsonParseError err;

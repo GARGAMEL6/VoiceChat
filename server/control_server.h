@@ -13,7 +13,7 @@ class AuthManager; // Forward declaration
 class ControlServer : public QObject {
     Q_OBJECT
 public:
-    explicit ControlServer(quint16 tcpPort, quint16 udpPort, AuthManager* auth, QObject* parent = nullptr);
+    explicit ControlServer(const QString& bindIp, quint16 tcpPort, quint16 udpPort, AuthManager* auth, QObject* parent = nullptr);
     bool isListening() const;
 
 private slots:

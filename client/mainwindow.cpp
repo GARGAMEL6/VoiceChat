@@ -175,7 +175,7 @@ void MainWindow::onLoginClicked() {
     
     // 🔹 Проверяем, не подключены ли уже
     if (!m_client->isConnected()) {
-        m_client->connectToServer("127.0.0.1", 9000);
+        m_client->connectToServer();
     }
 
     // Отправляем LOGIN с задержкой (даём время на подключение)
@@ -200,7 +200,7 @@ void MainWindow::onRegisterClicked() {
     m_lblStatus->setText("Подключение...");
     
     if (!m_client->isConnected()) {
-        m_client->connectToServer("127.0.0.1", 9000);
+        m_client->connectToServer();
     }
 
     QTimer::singleShot(500, [this, login, pass]() {
@@ -522,7 +522,7 @@ void MainWindow::onAudioCaptured() {
 
     QByteArray data = captureDev->readAll();
     if (!data.isEmpty()) {
-        m_udpSocket->writeDatagram(data, QHostAddress("127.0.0.1"), 9001);
+        m_udpSocket->writeDatagram(data, QHostAddress(m_client->getHost()), m_client->getUdpPort());
     }
 }
 

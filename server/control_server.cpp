@@ -1,31 +1,37 @@
 #include "control_server.h"
 #include "client_session.h"
-#include "auth_manager.h" // 🔹 Подключаем
+#include "auth_manager.h"
 #include <QDateTime>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QJsonArray>
 #include <QDebug>
 
-ControlServer::ControlServer(quint16 tcpPort, quint16 udpPort, AuthManager* auth, QObject* parent)
+ControlServer::ControlServer(const QString& bindIp, quint16 tcpPort, quint16 udpPort, AuthManager* auth, QObject* parent)
     : QObject(parent), m_auth(auth), m_udpSocket(new QUdpSocket(this))
 {
+    // 🔹 Преобразуем строку "0.0.0.0" в объект QHostAddress
+    QHostAddress address(bindIp);
+
     // TCP
-    if (!m_tcpServer.listen(QHostAddress::Any, tcpPort)) {
-        qCritical() << "[CONTROL] Failed to bind TCP port" << tcpPort << ":" << m_tcpServer.errorString();
+    if (!m_tcpServer.listen(address, tcpPort)) {
+        qCritical() << "[CONTROL] Failed to bind TCP to" << bindIp << ":" << tcpPort << "-" << m_tcpServer.errorString();
     } else {
-        qDebug() << "[CONTROL] TCP listening on port" << tcpPort;
+        qDebug() << "[CONTROL] TCP listening on" << bindIp << ":" << tcpPort;
     }
 
     // UDP
-    if (!m_udpSocket->bind(QHostAddress::Any, udpPort)) {
-        qCritical() << "[CONTROL] Failed to bind UDP port" << udpPort << ":" << m_udpSocket->errorString();
+    if (!m_udpSocket->bind(address, udpPort)) {
+        qCritical() << "[CONTROL] Failed to bind UDP to" << bindIp << ":" << udpPort << "-" << m_udpSocket->errorString();
     } else {
-        qDebug() << "[CONTROL] UDP listening on port" << udpPort;
+        qDebug() << "[CONTROL] UDP listening on" << bindIp << ":" << udpPort;
     }
 
     connect(&m_tcpServer, &QTcpServer::newConnection, this, &ControlServer::onNewConnection);
     connect(m_udpSocket, &QUdpSocket::readyRead, this, &ControlServer::onUdpReadyRead);
 }
+
+// ... остальное без изменений ...
 
 bool ControlServer::isListening() const {
     return m_tcpServer.isListening();
