@@ -13,6 +13,7 @@ public:
     void sendReply(const QJsonObject& response);
     void sendRaw(const QByteArray& data);
     void disconnectFromServer();
+    QHostAddress peerAddress() const;
 
 signals:
     void messageReceived(const QString& cmd, const QJsonObject& data, int reqId);

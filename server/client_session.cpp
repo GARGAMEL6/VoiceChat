@@ -60,3 +60,7 @@ void ClientSession::sendRaw(const QByteArray& data) {
 void ClientSession::disconnectFromServer() {
     m_socket->disconnectFromHost();
 }
+
+QHostAddress ClientSession::peerAddress() const {
+    return m_socket->peerAddress();
+}

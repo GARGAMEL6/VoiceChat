@@ -11,6 +11,7 @@ int main(int argc, char *argv[]) {
     QString configPath = QDir::cleanPath(QCoreApplication::applicationDirPath() + "/../config.ini");
     QSettings settings(configPath, QSettings::IniFormat);
     quint16 tcpPort = settings.value("network/tcp_port", 9000).toUInt();
+    quint16 udpPort = settings.value("network/udp_port", 9001).toUInt();
     qDebug() << "[SERVER] Config loaded:" << configPath << "| Port:" << tcpPort;
 
     AuthManager auth;
@@ -20,7 +21,7 @@ int main(int argc, char *argv[]) {
     }
 
     // 🔹 Передаём auth в ControlServer
-    ControlServer server(tcpPort, &auth);
+    ControlServer server(tcpPort, udpPort, &auth);
     if (!server.isListening()) {
         return 1;
     }

@@ -50,6 +50,9 @@ private:
     
     QString m_currentUser;
     
+    
+    
+    
     // Флаги для управления историей
     bool m_isLoadingHistory;
     bool m_isHistoryExhausted;

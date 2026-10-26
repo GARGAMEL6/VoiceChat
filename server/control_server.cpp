@@ -6,16 +6,25 @@
 #include <QJsonArray>
 #include <QDebug>
 
-ControlServer::ControlServer(quint16 port, AuthManager* auth, QObject* parent)
-    : QObject(parent), m_auth(auth) // 🔹 Сохраняем указатель
+ControlServer::ControlServer(quint16 tcpPort, quint16 udpPort, AuthManager* auth, QObject* parent)
+    : QObject(parent), m_auth(auth), m_udpSocket(new QUdpSocket(this))
 {
-    if (!m_tcpServer.listen(QHostAddress::Any, port)) {
-        qCritical() << "[CONTROL] Failed to bind port" << port << ":" << m_tcpServer.errorString();
+    // TCP
+    if (!m_tcpServer.listen(QHostAddress::Any, tcpPort)) {
+        qCritical() << "[CONTROL] Failed to bind TCP port" << tcpPort << ":" << m_tcpServer.errorString();
     } else {
-        qDebug() << "[CONTROL] Listening on port" << port;
+        qDebug() << "[CONTROL] TCP listening on port" << tcpPort;
+    }
+
+    // UDP
+    if (!m_udpSocket->bind(QHostAddress::Any, udpPort)) {
+        qCritical() << "[CONTROL] Failed to bind UDP port" << udpPort << ":" << m_udpSocket->errorString();
+    } else {
+        qDebug() << "[CONTROL] UDP listening on port" << udpPort;
     }
 
     connect(&m_tcpServer, &QTcpServer::newConnection, this, &ControlServer::onNewConnection);
+    connect(m_udpSocket, &QUdpSocket::readyRead, this, &ControlServer::onUdpReadyRead);
 }
 
 bool ControlServer::isListening() const {
@@ -29,14 +38,16 @@ void ControlServer::onNewConnection() {
     qDebug() << "[CONTROL] Client connected. Active sessions:" << m_sessions.size();
 
     connect(session, &ClientSession::sessionClosed, this, [this, session]() {
-        // 🔹 Удаляем пользователя из маппинга, если он там есть
-        for (auto it = m_onlineUsers.begin(); it != m_onlineUsers.end(); ++it) {
-            if (it.value() == session) {
-                m_onlineUsers.erase(it);
-                qDebug() << "[CONTROL] Removed user from online list";
-                break;
-            }
+        // 🔹 Получаем логин пользователя, привязанного к этой сессии
+        QString login = loginForSession(session);
+        
+        if (!login.isEmpty()) {
+            // Удаляем из обоих списков: авторизованных и голосовых
+            m_onlineUsers.remove(login);
+            m_voiceClients.remove(login);
+            qDebug() << "[CONTROL] User" << login << "disconnected, removed from online and voice lists";
         }
+        
         onSessionClosed(session);
     });
 
@@ -163,6 +174,37 @@ void ControlServer::onNewConnection() {
             qDebug() << "[CONTROL] History page:" << messages.size()
                     << "before_id:" << beforeId;
         }
+        else if (cmd == "JOIN_VOICE") {
+            QString login = loginForSession(session);
+            if (login.isEmpty()) {
+                sendStatus(session, "JOIN_VOICE_ERR", reqId, false, "Login required");
+                return;
+            }
+        
+            quint16 udpPort = data["udp_port"].toInt(0);
+            if (udpPort == 0) {
+                sendStatus(session, "JOIN_VOICE_ERR", reqId, false, "Invalid UDP port");
+                return;
+            }
+        
+            // Запоминаем адрес клиента (берём из TCP-сессии)
+            QHostAddress clientAddr = session->peerAddress();
+            m_voiceClients[login] = qMakePair(clientAddr, udpPort);
+        
+            qDebug() << "[CONTROL] User" << login << "joined voice room on UDP port" << udpPort;
+            sendStatus(session, "JOIN_VOICE_ACK", reqId, true);
+        }
+        else if (cmd == "LEAVE_VOICE") {
+            QString login = loginForSession(session);
+            if (login.isEmpty()) {
+                sendStatus(session, "LEAVE_VOICE_ERR", reqId, false, "Login required");
+                return;
+            }
+        
+            m_voiceClients.remove(login);
+            qDebug() << "[CONTROL] User" << login << "left voice room";
+            sendStatus(session, "LEAVE_VOICE_ACK", reqId, true);
+        }
         else {
             resp["cmd"] = cmd + "_ERR";
             resp["status"] = "error";
@@ -214,4 +256,44 @@ QString ControlServer::loginForSession(ClientSession* session) const
         if (it.value() == session) return it.key();
     }
     return QString();   // пустая строка = сессия не авторизована
+}
+
+
+void ControlServer::broadcastUdp(const QByteArray& data, const QString& senderLogin)
+{
+    // Рассылаем всем, КРОМЕ отправителя
+    for (auto it = m_voiceClients.begin(); it != m_voiceClients.end(); ++it) {
+        if (it.key() != senderLogin) {
+            m_udpSocket->writeDatagram(data, it.value().first, it.value().second);
+        }
+    }
+    qDebug() << "[CONTROL] UDP broadcast from" << senderLogin << "to" << (m_voiceClients.size() - 1) << "clients";
+}
+
+
+void ControlServer::onUdpReadyRead()
+{
+    while (m_udpSocket->hasPendingDatagrams()) {
+        QByteArray datagram;
+        datagram.resize(m_udpSocket->pendingDatagramSize());
+        QHostAddress senderAddr;
+        quint16 senderPort;
+
+        m_udpSocket->readDatagram(datagram.data(), datagram.size(), &senderAddr, &senderPort);
+
+        // Находим логин отправителя по адресу
+        QString senderLogin;
+        for (auto it = m_voiceClients.begin(); it != m_voiceClients.end(); ++it) {
+            if (it.value().first == senderAddr && it.value().second == senderPort) {
+                senderLogin = it.key();
+                break;
+            }
+        }
+
+        if (!senderLogin.isEmpty()) {
+            broadcastUdp(datagram, senderLogin);
+        } else {
+            qWarning() << "[CONTROL] UDP packet from unknown sender:" << senderAddr << senderPort;
+        }
+    }
 }
