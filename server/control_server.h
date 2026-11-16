@@ -35,4 +35,6 @@ private:
     QList<ClientSession*> m_sessions;
     AuthManager* m_auth; // 🔹 Указатель на AuthManager
     QMap<QString, QPair<QHostAddress, quint16>> m_voiceClients;
+    QMap<QString, QString> m_voiceTokens;      // <-- ДОБАВЬ ЭТО
+    QMap<QString, QHostAddress> m_voiceIps;    // <-- ДОБАВЬ ЭТО
 };

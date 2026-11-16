@@ -347,6 +347,18 @@ void MainWindow::onCommandReceived(const QString& cmd, const QJsonObject& data, 
         // <-- ОБНОВЛЕНО: передаем 5 аргументов, false = добавляем в конец
         addMessageToChat(from, text, ts, id, false);
     }
+    else if (cmd == "JOIN_VOICE_ACK") {
+        if (data["status"].toString() == "ok") {
+            m_voiceToken = data["voice_token"].toString();
+            
+            // Сразу отправляем UDP REGISTER с токеном
+            QByteArray registerPacket = "REGISTER:" + m_currentUser.toUtf8() + ":" + m_voiceToken.toUtf8() + "\n";
+            m_udpSocket->writeDatagram(registerPacket, QHostAddress(m_client->getHost()), m_client->getUdpPort());
+            qDebug() << "[VOICE] Sent UDP REGISTER with token";
+        } else {
+            qWarning() << "[VOICE] JOIN failed:" << data["reason"].toString();
+        }
+    }
 }
 
 
@@ -483,6 +495,11 @@ void MainWindow::onJoinVoiceRoom() {
 
 void MainWindow::onLeaveVoiceRoom() {
     if (!m_inVoiceRoom) return;
+    
+    if (!m_voiceToken.isEmpty()) {
+        QByteArray unregisterPacket = "UNREGISTER:" + m_currentUser.toUtf8() + "\n";
+        m_udpSocket->writeDatagram(unregisterPacket, QHostAddress(m_client->getHost()), m_client->getUdpPort());
+    }
 
     // 1. Останавливаем аудио
     m_audioManager->stopCapture();
@@ -499,6 +516,7 @@ void MainWindow::onLeaveVoiceRoom() {
     m_localUdpPort = 0;
 
     // 5. Меняем UI
+    m_voiceToken.clear();
     m_inVoiceRoom = false;
     m_btnVoiceRoom->setText("🎙️ Войти в комнату");
     m_btnVoiceRoom->setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;");

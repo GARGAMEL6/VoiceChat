@@ -75,10 +75,12 @@ private:
     QUdpSocket* m_udpSocket;
     bool m_inVoiceRoom;
     quint16 m_localUdpPort;
+    QString m_voiceToken;
     
     QPushButton* m_btnMute;
     QSlider* m_volumeSlider;
     bool m_isMuted;
     
-    QMediaDevices m_mediaDevices; 
+    QMediaDevices m_mediaDevices;
+    
 };

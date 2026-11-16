@@ -187,18 +187,21 @@ void ControlServer::onNewConnection() {
                 return;
             }
         
-            quint16 udpPort = data["udp_port"].toInt(0);
-            if (udpPort == 0) {
-                sendStatus(session, "JOIN_VOICE_ERR", reqId, false, "Invalid UDP port");
-                return;
-            }
-        
-            // Запоминаем адрес клиента (берём из TCP-сессии)
-            QHostAddress clientAddr = session->peerAddress();
-            m_voiceClients[login] = qMakePair(clientAddr, udpPort);
-        
-            qDebug() << "[CONTROL] User" << login << "joined voice room on UDP port" << udpPort;
-            sendStatus(session, "JOIN_VOICE_ACK", reqId, true);
+            // Генерируем уникальный токен для этой сессии
+            QString token = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            m_voiceTokens[login] = token;
+            // m_voiceIps пока пуст, он зафиксируется при первом UDP REGISTER
+            
+            QJsonObject res;
+            res["cmd"] = "JOIN_VOICE_ACK";
+            res["req_id"] = reqId;
+            QJsonObject data;
+            data["status"] = "ok";
+            data["voice_token"] = token; // Отправляем токен клиенту
+            res["data"] = data;
+            session->sendReply(res);
+            
+            qDebug() << "[CONTROL] Voice token issued for" << login;
         }
         else if (cmd == "LEAVE_VOICE") {
             QString login = loginForSession(session);
@@ -208,6 +211,8 @@ void ControlServer::onNewConnection() {
             }
         
             m_voiceClients.remove(login);
+            m_voiceTokens.remove(login);   // <-- ДОБАВЬ
+            m_voiceIps.remove(login);      // <-- ДОБАВЬ
             qDebug() << "[CONTROL] User" << login << "left voice room";
             sendStatus(session, "LEAVE_VOICE_ACK", reqId, true);
         }
@@ -277,8 +282,7 @@ void ControlServer::broadcastUdp(const QByteArray& data, const QString& senderLo
 }
 
 
-void ControlServer::onUdpReadyRead()
-{
+void ControlServer::onUdpReadyRead() {
     while (m_udpSocket->hasPendingDatagrams()) {
         QByteArray datagram;
         datagram.resize(m_udpSocket->pendingDatagramSize());
@@ -287,19 +291,61 @@ void ControlServer::onUdpReadyRead()
 
         m_udpSocket->readDatagram(datagram.data(), datagram.size(), &senderAddr, &senderPort);
 
-        // Находим логин отправителя по адресу
-        QString senderLogin;
-        for (auto it = m_voiceClients.begin(); it != m_voiceClients.end(); ++it) {
-            if (it.value().first == senderAddr && it.value().second == senderPort) {
-                senderLogin = it.key();
-                break;
+        if (datagram.startsWith("REGISTER:")) {
+            QString payload = QString::fromUtf8(datagram).trimmed();
+            QStringList parts = payload.split(':');
+            if (parts.size() < 3) {
+                qWarning() << "[CONTROL] Malformed REGISTER packet from" << senderAddr;
+                continue;
+            }
+            QString login = parts[1];
+            QString token = parts[2];
+
+            if (!m_onlineUsers.contains(login)) {
+                qWarning() << "[CONTROL] REGISTER for non-online user:" << login;
+                continue;
+            }
+            if (!m_voiceTokens.contains(login) || m_voiceTokens[login] != token) {
+                qWarning() << "[CONTROL] INVALID TOKEN for" << login << "from" << senderAddr << "— spoofing attempt";
+                continue;
+            }
+
+            // ПРОВЕРКА IP: если уже зафиксирован, должен совпадать
+            if (m_voiceIps.contains(login)) {
+                if (m_voiceIps[login] != senderAddr) {
+                    qWarning() << "[CONTROL] TOKEN REPLAY ATTACK:" << login 
+                               << "from" << senderAddr << "(expected" << m_voiceIps[login] << ")";
+                    continue; // Блокируем атаку!
+                }
+            } else {
+                // Первая регистрация: фиксируем реальный IP за NAT
+                m_voiceIps[login] = senderAddr;
+                qDebug() << "[CONTROL] IP locked for" << login << "to" << senderAddr;
+            }
+
+            m_voiceClients[login] = qMakePair(senderAddr, senderPort);
+            qDebug() << "[CONTROL] UDP REGISTER OK:" << login;
+        }
+        else if (datagram.startsWith("UNREGISTER:")) {
+            QString login = QString::fromUtf8(datagram.mid(11)).trimmed();
+            if (m_voiceClients.contains(login)) {
+                m_voiceClients.remove(login);
+                m_voiceIps.remove(login);
+                qDebug() << "[CONTROL] UDP UNREGISTER:" << login;
             }
         }
-
-        if (!senderLogin.isEmpty()) {
-            broadcastUdp(datagram, senderLogin);
-        } else {
-            qWarning() << "[CONTROL] UDP packet from unknown sender:" << senderAddr << senderPort;
+        else {
+            // Это аудио-пакет. Ищем отправителя по зафиксированному IP+PORT
+            QString senderLogin;
+            for (auto it = m_voiceClients.begin(); it != m_voiceClients.end(); ++it) {
+                if (it.value().first == senderAddr && it.value().second == senderPort) {
+                    senderLogin = it.key();
+                    break;
+                }
+            }
+            if (!senderLogin.isEmpty()) {
+                broadcastUdp(datagram, senderLogin);
+            }
         }
     }
 }
